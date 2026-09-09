@@ -19,11 +19,11 @@ test_step = 0
 
 
 def get_barrier_states():
-    wall_states = []
-    door_states = []
-    processed_edges = set()
+    wall_states = [] #arreglo con paredes
+    door_states = [] #arreglo con puertas
+    processed_edges = set() #set de llaves de barreras ya procesadas
     directions = ("up", "down", "left", "right")
-
+    #crear llave única para cada barrera, importante para no duplicar (2 celdas comparten barrera) y agregar a set
     for row in range(model.rows):
         for column in range(model.columns):
             for direction in directions:
@@ -36,28 +36,28 @@ def get_barrier_states():
                 else:
                     edge_key = ("vertical", row, column + 1)
 
-                if edge_key in processed_edges:
+                if edge_key in processed_edges: #si ya existe la llave, no hace nada
                     continue
 
-                processed_edges.add(edge_key)
+                processed_edges.add(edge_key) #agregar la nueva llave
 
-                wall_state = getattr(
+                wall_state = getattr( #obtener pared, estado y dirección
                     model.environment.walls[row][column],
                     direction
                 )
-                door_state = getattr(
+                door_state = getattr( #obtener puerta, estado y dirección
                     model.environment.doors[row][column],
                     direction
                 )
 
-                if wall_state > 0:
+                if wall_state > 0: #sí hay una pared, se agrega a us arreglo
                     wall_states.append({
                         "row": row,
                         "column": column,
                         "direction": direction,
                         "state": wall_state,
                     })
-                elif door_state > 0:
+                elif door_state > 0: #sí hay una puerta, se agrega a su arreglo
                     door_states.append({
                         "row": row,
                         "column": column,
@@ -65,21 +65,21 @@ def get_barrier_states():
                         "state": door_state,
                     })
 
-    return wall_states, door_states
+    return wall_states, door_states  #devolver arreglos de paredes y puertas
 
 
 def get_board_state(last_fireAdvance=None):
     #Prepara formato tipo json con la información que se envía a Unity
-    wall_states, door_states = get_barrier_states()
-    poi_states = []
+    wall_states, door_states = get_barrier_states() #obtener barreras con función aparte
+    poi_states = [] #arreglo para guardar los POIs
     victim_visual_index = 0
-    for poi_id, poi in enumerate(model.pois):
+    for poi_id, poi in enumerate(model.pois): #recorrer todos los POIs del modelo
         visual_index = -1
-        if poi.type == "victim":
-            visual_index = victim_visual_index
+        if poi.type == "victim": #si el POI es de tipo víctima
+            visual_index = victim_visual_index #se le asigna el siguiente visual de víctima
             victim_visual_index += 1
 
-        poi_states.append({
+        poi_states.append({ #agregar el nuevo POI con sus atributos al arreglo de POIs 
             "id": poi_id,
             "row": poi.row,
             "column": poi.column,
@@ -90,18 +90,18 @@ def get_board_state(last_fireAdvance=None):
         })
 
     firefighter_states = []
-    for player, firefighter in enumerate(model.firefighters):
-        firefighter_states.append({
+    for player, firefighter in enumerate(model.firefighters): #recorrer todos los bomberos del modelo
+        firefighter_states.append({ #agregarlos al arreglo de bomberos con sus atributos
             "player": player,
             "row": firefighter.row,
             "column": firefighter.column,
         })
 
-    state = {
+    state = { #estado del tablero completo (incluye los arreglos de todos los objetos y agentes)
         "rows": model.rows,
         "columns": model.columns,
         "turn": turn,
-        #Se deben aplanar las matrices como lista para el formato ([row, column] es row * columns + column)
+        #Se debe aplanar las matriz de fuego como lista para el formato ([row, column] es row * columns + column)
         "fires": model.fireCells.flatten().tolist(),
         "walls": wall_states,
         "doors": door_states,
