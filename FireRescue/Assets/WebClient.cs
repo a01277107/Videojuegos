@@ -7,7 +7,7 @@ using UnityEngine;
 using UnityEngine.Networking;
 
 [Serializable]
-public class BarrierState
+public class BarrierState //clase para arreglo de barreras (puertas y paredes)
 {
     public int row;
     public int column;
@@ -16,7 +16,7 @@ public class BarrierState
 }
 
 [Serializable]
-public class POIState
+public class POIState //clase para arreglo de POIs
 {
     public int id;
     public int row;
@@ -28,14 +28,14 @@ public class POIState
 }
 
 [Serializable]
-public class FirefighterState
+public class FirefighterState //clase para arreglo de bomberos
 {
     public int player;
     public int row;
     public int column;
 }
 
-//clase formada a partir del JSON que manda mesa del estado del tablero
+//clase formada a partir del JSON que manda mesa del estado del tablero: guarda los arreglos de la clase de cada gameObject (objeto o agente)
 [Serializable] //convertibles desde o hacia JSON
 public class BoardState
 {
@@ -86,9 +86,9 @@ public class WebClient : MonoBehaviour
     [SerializeField] private Vector3 verticalBarrierEulerRotation = new Vector3(0f, 90f, 0f);
     [SerializeField] private bool clearContainerOnStart = true;
 
-    //diccionario de los contenidos (GameObjects) que existen
-    private readonly Dictionary<int, CellVisual> activeVisuals =
-        new Dictionary<int, CellVisual>();
+    //diccionarios de los contenidos gráficos (GameObjects) que existen (objetos y agentes)
+    private readonly Dictionary<int, EffectVisual> activeEffectVisuals =
+        new Dictionary<int, EffectVisual>();
     private readonly Dictionary<string, BarrierVisual> activeBarrierVisuals =
         new Dictionary<string, BarrierVisual>();
     private readonly Dictionary<int, POIVisual> activePOIVisuals =
@@ -98,7 +98,7 @@ public class WebClient : MonoBehaviour
     private bool requestInProgress; //evita que se hagan dos petciciones simultáneas
 
     //clase para obtener/guardar contenido de las celdas en Unity
-    private class CellVisual
+    private class EffectVisual
     {
         public int state; //representa si es fuego o humo
         public GameObject gameObject; //objeto creado en unity
@@ -106,23 +106,23 @@ public class WebClient : MonoBehaviour
 
     private class BarrierVisual
     {
-        public string type;
-        public int state;
+        public string type; //representa si es pared o puerta
+        public int state; //representa su estado (dañanada, abierta, etc.)
         public GameObject gameObject;
     }
 
     private class POIVisual
     {
-        public string type;
-        public bool revealed;
+        public string type; //representa si es víctima o falsa alarma
+        public bool revealed; //si ya fue revelado o no
         public int visualIndex;
         public GameObject gameObject;
     }
 
     private void Start() //Se llama automáticamente al inicio de la simulación
-    {
+    { //quitar los objetos que existen antes de empezar simulación
         if (clearContainerOnStart && effectsContainer != null)
-        { //quitar los objetos que existen antes de empezar simulaciób
+        { 
             foreach (Transform child in effectsContainer)
             {
                 Destroy(child.gameObject);
@@ -166,7 +166,7 @@ public class WebClient : MonoBehaviour
         }
     }
 
-    //para probar: cambiar manualmente elementos del tablero
+    //para probar: cambiar elementos del tablero específicos
     public void TestConnection()
     {
         if (!requestInProgress)
@@ -175,7 +175,7 @@ public class WebClient : MonoBehaviour
         }
     }
 
-    //para pruebas: ejecutar manualmente advanceFire
+    //para probar: ejecutar manualmente advanceFire
     public void AdvanceFire()
     {
         if (!requestInProgress)
@@ -193,7 +193,7 @@ public class WebClient : MonoBehaviour
         }
     }
 
-    //para probar
+    //corrutina para probar y modificar gameObjects
     private IEnumerator RequestTest()
 {
     requestInProgress = true;
@@ -248,6 +248,7 @@ public class WebClient : MonoBehaviour
         return request;
     }
 
+    //función para manejar respuestas del servidor
     private void HandleResponse(UnityWebRequest request)
     {
         if (request.result != UnityWebRequest.Result.Success) //manejador de error
@@ -265,7 +266,7 @@ public class WebClient : MonoBehaviour
             Debug.LogError("La respuesta del servidor no contiene fireCells.");
             return;
         }
-        //usa estado nuevo para aplicarlo a la matriz de objetos de fuego
+        //usa estado nuevo para aplicarlo a la matriz de objetos de fuego y a arreglos de los demás objetos y agentes
         ApplyFireMatrix(state);
         ApplyBarriers(state);
         ApplyPOIs(state);
@@ -291,14 +292,14 @@ public class WebClient : MonoBehaviour
             { //obtener índice de arreglo correspondiente a fila y columna
                 int index = row * boardState.columns + column;
                 //modificar contenido de la celda de acuerdo a estado del tablero
-                UpdateCellVisual(row, column, index, boardState.fires[index]);
+                UpdateEffectVisual(row, column, index, boardState.fires[index]);
             }
         }
     }
 
-    private void UpdateCellVisual(int row, int column, int index, int state)
+    private void UpdateEffectVisual(int row, int column, int index, int state)
     { //obtener del diccionario el contenido de la celda si existe en currentVisual
-        if (activeVisuals.TryGetValue(index, out CellVisual currentVisual))
+        if (activeEffectVisuals.TryGetValue(index, out EffectVisual currentVisual))
         {
             if (currentVisual.state == state) //si la casilla mantuvo su estado
             {
@@ -306,7 +307,7 @@ public class WebClient : MonoBehaviour
             }
             // si cambió de estado se destruye el gamObject actual
             Destroy(currentVisual.gameObject);
-            activeVisuals.Remove(index);
+            activeEffectVisuals.Remove(index);
         }
 
         GameObject selectedPrefab = null;
@@ -332,39 +333,39 @@ public class WebClient : MonoBehaviour
             parent //en contenedor padre
         );
         //guardar nuevo GameObject instanciado en diccionario
-        activeVisuals[index] = new CellVisual
+        activeEffectVisuals[index] = new EffectVisual
         {
             state = state,
             gameObject = visual
         };
     }
 
-    private void ApplyBarriers(BoardState boardState)
-    {
-        HashSet<string> receivedKeys = new HashSet<string>();
+    private void ApplyBarriers(BoardState boardState) 
+    { //se usan llaves de las barreras existentes y activas para evitar duplicados (en mesa eran atributos de 2 celdas, no una)
+        HashSet<string> receivedKeys = new HashSet<string>(); 
 
         if (boardState.walls != null)
-        {
+        { //usa arreglo paredes de clase de barreras en clase del estado del tablero
             foreach (BarrierState wallState in boardState.walls)
             {
-                UpdateBarrierVisual(wallState, "wall", receivedKeys);
+                UpdateBarrierVisual(wallState, "wall", receivedKeys); //manda actualizar cada uno
             }
         }
 
         if (boardState.doors != null)
-        {
+        { //usa arreglo puertas de clase de barreras en clase del estado del tablero
             foreach (BarrierState doorState in boardState.doors)
             {
                 UpdateBarrierVisual(doorState, "door", receivedKeys);
             }
         }
-
+        //eliminar barreras que ya no están activas 
         List<string> removedKeys = new List<string>();
-        foreach (KeyValuePair<string, BarrierVisual> barrier in activeBarrierVisuals)
+        foreach (KeyValuePair<string, BarrierVisual> barrier in activeBarrierVisuals) //revisa todo el diccionario de barreras
         {
-            if (!receivedKeys.Contains(barrier.Key))
+            if (!receivedKeys.Contains(barrier.Key)) //la barrera ya no se encuentra en llave en las recibidas (inactiva)
             {
-                Destroy(barrier.Value.gameObject);
+                Destroy(barrier.Value.gameObject); //destruir el gameobject y quitar del diccionaro
                 removedKeys.Add(barrier.Key);
             }
         }
@@ -393,11 +394,11 @@ public class WebClient : MonoBehaviour
         if (type == "wall")
         {
             height = wallHeight;
-            if (barrierState.state == 2)
+            if (barrierState.state == 2) //estado normal, añadir pared normal
             {
                 selectedPrefab = wallPrefab;
             }
-            else if (barrierState.state == 1)
+            else if (barrierState.state == 1) //estado dañado, añadir pared dañada
             {
                 selectedPrefab = damagedWallPrefab != null
                     ? damagedWallPrefab
@@ -407,11 +408,11 @@ public class WebClient : MonoBehaviour
         else if (type == "door")
         {
             height = doorHeight;
-            if (barrierState.state == 2)
+            if (barrierState.state == 2) //estado cerrado, cambiar a puerta cerrada
             {
                 selectedPrefab = closedDoorPrefab;
             }
-            else if (barrierState.state == 1)
+            else if (barrierState.state == 1) //estado abierto, cambiar a puerta abierta
             {
                 selectedPrefab = openedDoorPrefab;
             }
@@ -419,7 +420,7 @@ public class WebClient : MonoBehaviour
 
         if (activeBarrierVisuals.TryGetValue(key, out BarrierVisual currentVisual))
         {
-            if (currentVisual.type == type && currentVisual.state == barrierState.state)
+            if (currentVisual.type == type && currentVisual.state == barrierState.state) //el objeto permaneció igual
             {
                 currentVisual.gameObject.transform.position = BarrierGridToWorld(
                     barrierState.row,
@@ -432,7 +433,7 @@ public class WebClient : MonoBehaviour
                 );
                 return;
             }
-
+            //cambio el objeto o su estado, quitar el anterior
             Destroy(currentVisual.gameObject);
             activeBarrierVisuals.Remove(key);
         }
@@ -444,7 +445,7 @@ public class WebClient : MonoBehaviour
 
         Transform parent = barriersContainer != null ? barriersContainer : transform;
         GameObject visual = Instantiate(
-            selectedPrefab,
+            selectedPrefab, //añadir nuevo prefab correspondiente
             BarrierGridToWorld(
                 barrierState.row,
                 barrierState.column,
@@ -455,7 +456,7 @@ public class WebClient : MonoBehaviour
             parent
         );
 
-        activeBarrierVisuals[key] = new BarrierVisual
+        activeBarrierVisuals[key] = new BarrierVisual //añadir nuevo gameobject a diccionario de barreras activas
         {
             type = type,
             state = barrierState.state,
@@ -463,6 +464,7 @@ public class WebClient : MonoBehaviour
         };
     }
 
+    //función para crear las llaves de las barreras y obtener la misma llave para 2 celdas de mesa que comparten una pared (evitando duplicados)
     private string GetBarrierKey(int row, int column, string direction)
     {
         if (direction == "up")
@@ -480,7 +482,7 @@ public class WebClient : MonoBehaviour
         return "V_" + row + "_" + (column + 1);
     }
 
-    private Quaternion BarrierRotation(string direction)
+    private Quaternion BarrierRotation(string direction) //quitar rotación?
     {
         if (direction == "up" || direction == "down")
         {
@@ -489,7 +491,7 @@ public class WebClient : MonoBehaviour
         return Quaternion.Euler(verticalBarrierEulerRotation);
     }
 
-    private void ApplyPOIs(BoardState boardState)
+    private void ApplyPOIs(BoardState boardState) //usa arreglo de clase POIs en clase del estado del tablero
     {
         if (boardState.pois == null)
         {
@@ -498,17 +500,17 @@ public class WebClient : MonoBehaviour
 
         foreach (POIState poiState in boardState.pois)
         {
-            UpdatePOIVisual(poiState);
+            UpdatePOIVisual(poiState); //manda actualizar cada uno
         }
     }
 
     private void UpdatePOIVisual(POIState poiState)
     {
-        if (!poiState.active)
+        if (!poiState.active) //eliminar POIs que ya no están activos (ya no existen)
         {
             if (activePOIVisuals.TryGetValue(poiState.id, out POIVisual inactiveVisual))
             {
-                Destroy(inactiveVisual.gameObject);
+                Destroy(inactiveVisual.gameObject); //eliminar y quitar de diccionario
                 activePOIVisuals.Remove(poiState.id);
             }
             return;
@@ -517,19 +519,19 @@ public class WebClient : MonoBehaviour
         GameObject selectedPrefab = null;
         if (!poiState.revealed)
         {
-            selectedPrefab = poiPrefab;
+            selectedPrefab = poiPrefab; //si no ha sido revelado permanece igual
         }
         else if (poiState.type == "victim")
         {
             if (victimPrefabs != null && victimPrefabs.Length > 0)
             {
                 int prefabIndex = poiState.visualIndex % victimPrefabs.Length;
-                selectedPrefab = victimPrefabs[prefabIndex];
+                selectedPrefab = victimPrefabs[prefabIndex]; //si es víctima se cambia a una de las víctimas
             }
         }
         else
         {
-            selectedPrefab = falseAlarmPrefab;
+            selectedPrefab = falseAlarmPrefab; //si no, se cambia falsa alarma
         }
 
         if (selectedPrefab == null)
@@ -539,7 +541,7 @@ public class WebClient : MonoBehaviour
 
         if (activePOIVisuals.TryGetValue(poiState.id, out POIVisual currentVisual))
         {
-            if (currentVisual.revealed == poiState.revealed
+            if (currentVisual.revealed == poiState.revealed //si sigue siendo mismo tipo y en misma lugar, se queda
                 && currentVisual.type == poiState.type
                 && currentVisual.visualIndex == poiState.visualIndex)
             {
@@ -549,20 +551,20 @@ public class WebClient : MonoBehaviour
                 );
                 return;
             }
-
+            //si cambió, se elimina gameobject anterior
             Destroy(currentVisual.gameObject);
             activePOIVisuals.Remove(poiState.id);
         }
 
         Transform parent = poisContainer != null ? poisContainer : transform;
         GameObject visual = Instantiate(
-            selectedPrefab,
+            selectedPrefab, //se añade el nuevo gameobject si cambió
             POIGridToWorld(poiState.row, poiState.column),
             Quaternion.Euler(poiEulerRotation),
             parent
         );
 
-        activePOIVisuals[poiState.id] = new POIVisual
+        activePOIVisuals[poiState.id] = new POIVisual //se añade al diccionario de POIs
         {
             type = poiState.type,
             revealed = poiState.revealed,
@@ -571,7 +573,7 @@ public class WebClient : MonoBehaviour
         };
     }
 
-    private void ApplyFirefighters(BoardState boardState)
+    private void ApplyFirefighters(BoardState boardState) //usa arreglo de clase bomberos en clase del estado del tablero
     {
         if (boardState.firefighters == null)
         {
@@ -580,13 +582,13 @@ public class WebClient : MonoBehaviour
 
         foreach (FirefighterState firefighterState in boardState.firefighters)
         {
-            UpdateFirefighterVisual(firefighterState);
+            UpdateFirefighterVisual(firefighterState); //manda actualizar cada uno
         }
     }
 
     private void UpdateFirefighterVisual(FirefighterState firefighterState)
     {
-        if (firefighterPrefabs == null
+        if (firefighterPrefabs == null //si los prefabs de bombero no están asignados para el num de jugadores
             || firefighterState.player < 0
             || firefighterState.player >= firefighterPrefabs.Length)
         {
@@ -625,7 +627,7 @@ public class WebClient : MonoBehaviour
     {
         //usar origen del tablero o 0,0,0
         Vector3 origin = boardOrigin != null ? boardOrigin.position : Vector3.zero;
-        //convertir a coordenadas del tablero de Unity: al centro (mitad) de las celdas y con altura 'y' determinada
+        //convertir a coordenadas de fuegos al tablero de Unity: al centro (mitad) de las celdas y con altura 'y' determinada
         return new Vector3(
             origin.x + column * cellSize + cellSize / 2f,
             origin.y + effectHeight,
@@ -668,7 +670,7 @@ public class WebClient : MonoBehaviour
         );
     }
 
-    private Vector3 POIGridToWorld(int row, int column)
+    private Vector3 POIGridToWorld(int row, int column) //convertir coord POIs a coordenadas del tablero de Unity
     {
         Vector3 origin = boardOrigin != null ? boardOrigin.position : Vector3.zero;
         return new Vector3(
@@ -678,7 +680,7 @@ public class WebClient : MonoBehaviour
         );
     }
 
-    private Vector3 FirefighterGridToWorld(int row, int column)
+    private Vector3 FirefighterGridToWorld(int row, int column) //convertir coord bomberos a coordenadas del tablero de Unity
     {
         Vector3 origin = boardOrigin != null ? boardOrigin.position : Vector3.zero;
         return new Vector3(
