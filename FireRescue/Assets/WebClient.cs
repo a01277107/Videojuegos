@@ -6,6 +6,35 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Networking;
 
+[Serializable]
+public class BarrierState
+{
+    public int row;
+    public int column;
+    public string direction;
+    public int state;
+}
+
+[Serializable]
+public class POIState
+{
+    public int id;
+    public int row;
+    public int column;
+    public string type;
+    public bool active;
+    public bool revealed;
+    public int visualIndex;
+}
+
+[Serializable]
+public class FirefighterState
+{
+    public int player;
+    public int row;
+    public int column;
+}
+
 //clase formada a partir del JSON que manda mesa del estado del tablero
 [Serializable] //convertibles desde o hacia JSON
 public class BoardState
@@ -16,6 +45,10 @@ public class BoardState
     public int advancedRow;
     public int advancedColumn;
     public int[] fires;
+    public BarrierState[] walls;
+    public BarrierState[] doors;
+    public POIState[] pois;
+    public FirefighterState[] firefighters;
 }
 
 public class WebClient : MonoBehaviour
@@ -27,16 +60,41 @@ public class WebClient : MonoBehaviour
     [SerializeField] private Transform boardOrigin; //origen del tablero
     [SerializeField] private float cellSize = 10f; //tamaño de celdas en el tablero
     [SerializeField] private float effectHeight = 2f; //altura en 'y' de los fuegos/humos
+    [SerializeField] private float poiHeight = 1f;
+    [SerializeField] private float firefighterHeight = 1f;
+    [SerializeField] private float wallHeight = 0f;
+    [SerializeField] private float doorHeight = 0f;
     [Header("Prefabs")]
     [SerializeField] private GameObject firePrefab;
     [SerializeField] private GameObject smokePrefab;
+    [SerializeField] private GameObject wallPrefab;
+    [SerializeField] private GameObject damagedWallPrefab;
+    [SerializeField] private GameObject closedDoorPrefab;
+    [SerializeField] private GameObject openedDoorPrefab;
+    [SerializeField] private GameObject poiPrefab;
+    [SerializeField] private GameObject falseAlarmPrefab;
+    [SerializeField] private GameObject[] victimPrefabs;
+    [SerializeField] private GameObject[] firefighterPrefabs;
     [SerializeField] private Transform effectsContainer; //contenedor de fuegos y humos
-    [SerializeField] private Vector3 prefabEulerRotation = Vector3.zero; //añadir los GamObjects sin rotación
+    [SerializeField] private Transform barriersContainer;
+    [SerializeField] private Transform poisContainer;
+    [SerializeField] private Transform firefightersContainer;
+    [SerializeField] private Vector3 prefabEulerRotation = Vector3.zero; //añadir los GameObjects sin rotación
+    [SerializeField] private Vector3 poiEulerRotation = Vector3.zero;
+    [SerializeField] private Vector3 firefighterEulerRotation = Vector3.zero;
+    [SerializeField] private Vector3 horizontalBarrierEulerRotation = Vector3.zero;
+    [SerializeField] private Vector3 verticalBarrierEulerRotation = new Vector3(0f, 90f, 0f);
     [SerializeField] private bool clearContainerOnStart = true;
 
     //diccionario de los contenidos (GameObjects) que existen
     private readonly Dictionary<int, CellVisual> activeVisuals =
         new Dictionary<int, CellVisual>();
+    private readonly Dictionary<string, BarrierVisual> activeBarrierVisuals =
+        new Dictionary<string, BarrierVisual>();
+    private readonly Dictionary<int, POIVisual> activePOIVisuals =
+        new Dictionary<int, POIVisual>();
+    private readonly Dictionary<int, GameObject> activeFirefighterVisuals =
+        new Dictionary<int, GameObject>();
     private bool requestInProgress; //evita que se hagan dos petciciones simultáneas
 
     //clase para obtener/guardar contenido de las celdas en Unity
@@ -46,11 +104,50 @@ public class WebClient : MonoBehaviour
         public GameObject gameObject; //objeto creado en unity
     }
 
+    private class BarrierVisual
+    {
+        public string type;
+        public int state;
+        public GameObject gameObject;
+    }
+
+    private class POIVisual
+    {
+        public string type;
+        public bool revealed;
+        public int visualIndex;
+        public GameObject gameObject;
+    }
+
     private void Start() //Se llama automáticamente al inicio de la simulación
     {
         if (clearContainerOnStart && effectsContainer != null)
         { //quitar los objetos que existen antes de empezar simulaciób
             foreach (Transform child in effectsContainer)
+            {
+                Destroy(child.gameObject);
+            }
+        }
+
+        if (clearContainerOnStart && barriersContainer != null)
+        {
+            foreach (Transform child in barriersContainer)
+            {
+                Destroy(child.gameObject);
+            }
+        }
+
+        if (clearContainerOnStart && poisContainer != null)
+        {
+            foreach (Transform child in poisContainer)
+            {
+                Destroy(child.gameObject);
+            }
+        }
+
+        if (clearContainerOnStart && firefightersContainer != null)
+        {
+            foreach (Transform child in firefightersContainer)
             {
                 Destroy(child.gameObject);
             }
@@ -66,6 +163,15 @@ public class WebClient : MonoBehaviour
         if (!requestInProgress)
         {
             StartCoroutine(RequestState(false));
+        }
+    }
+
+    //para probar: cambiar manualmente elementos del tablero
+    public void TestConnection()
+    {
+        if (!requestInProgress)
+        {
+            StartCoroutine(RequestTest());
         }
     }
 
@@ -86,6 +192,20 @@ public class WebClient : MonoBehaviour
             StartCoroutine(RequestReset());
         }
     }
+
+    //para probar
+    private IEnumerator RequestTest()
+{
+    requestInProgress = true;
+
+    using (UnityWebRequest request = CreateJsonPost(serverUrl + "/test"))
+    {
+        yield return request.SendWebRequest();
+        HandleResponse(request);
+    }
+
+    requestInProgress = false;
+}
 
     //corrutina para obtener estado del tablero (con o sin advanceFire)
     private IEnumerator RequestState(bool advanceFire)
@@ -147,6 +267,9 @@ public class WebClient : MonoBehaviour
         }
         //usa estado nuevo para aplicarlo a la matriz de objetos de fuego
         ApplyFireMatrix(state);
+        ApplyBarriers(state);
+        ApplyPOIs(state);
+        ApplyFirefighters(state);
         Debug.Log("Turno de fuego recibido: " + state.turn);
     }
 
@@ -216,6 +339,288 @@ public class WebClient : MonoBehaviour
         };
     }
 
+    private void ApplyBarriers(BoardState boardState)
+    {
+        HashSet<string> receivedKeys = new HashSet<string>();
+
+        if (boardState.walls != null)
+        {
+            foreach (BarrierState wallState in boardState.walls)
+            {
+                UpdateBarrierVisual(wallState, "wall", receivedKeys);
+            }
+        }
+
+        if (boardState.doors != null)
+        {
+            foreach (BarrierState doorState in boardState.doors)
+            {
+                UpdateBarrierVisual(doorState, "door", receivedKeys);
+            }
+        }
+
+        List<string> removedKeys = new List<string>();
+        foreach (KeyValuePair<string, BarrierVisual> barrier in activeBarrierVisuals)
+        {
+            if (!receivedKeys.Contains(barrier.Key))
+            {
+                Destroy(barrier.Value.gameObject);
+                removedKeys.Add(barrier.Key);
+            }
+        }
+
+        foreach (string key in removedKeys)
+        {
+            activeBarrierVisuals.Remove(key);
+        }
+    }
+
+    private void UpdateBarrierVisual(
+        BarrierState barrierState,
+        string type,
+        HashSet<string> receivedKeys)
+    {
+        string key = GetBarrierKey(
+            barrierState.row,
+            barrierState.column,
+            barrierState.direction
+        );
+        receivedKeys.Add(key);
+
+        GameObject selectedPrefab = null;
+        float height = 0f;
+
+        if (type == "wall")
+        {
+            height = wallHeight;
+            if (barrierState.state == 2)
+            {
+                selectedPrefab = wallPrefab;
+            }
+            else if (barrierState.state == 1)
+            {
+                selectedPrefab = damagedWallPrefab != null
+                    ? damagedWallPrefab
+                    : wallPrefab;
+            }
+        }
+        else if (type == "door")
+        {
+            height = doorHeight;
+            if (barrierState.state == 2)
+            {
+                selectedPrefab = closedDoorPrefab;
+            }
+            else if (barrierState.state == 1)
+            {
+                selectedPrefab = openedDoorPrefab;
+            }
+        }
+
+        if (activeBarrierVisuals.TryGetValue(key, out BarrierVisual currentVisual))
+        {
+            if (currentVisual.type == type && currentVisual.state == barrierState.state)
+            {
+                currentVisual.gameObject.transform.position = BarrierGridToWorld(
+                    barrierState.row,
+                    barrierState.column,
+                    barrierState.direction,
+                    height
+                );
+                currentVisual.gameObject.transform.rotation = BarrierRotation(
+                    barrierState.direction
+                );
+                return;
+            }
+
+            Destroy(currentVisual.gameObject);
+            activeBarrierVisuals.Remove(key);
+        }
+
+        if (selectedPrefab == null)
+        {
+            return;
+        }
+
+        Transform parent = barriersContainer != null ? barriersContainer : transform;
+        GameObject visual = Instantiate(
+            selectedPrefab,
+            BarrierGridToWorld(
+                barrierState.row,
+                barrierState.column,
+                barrierState.direction,
+                height
+            ),
+            BarrierRotation(barrierState.direction),
+            parent
+        );
+
+        activeBarrierVisuals[key] = new BarrierVisual
+        {
+            type = type,
+            state = barrierState.state,
+            gameObject = visual
+        };
+    }
+
+    private string GetBarrierKey(int row, int column, string direction)
+    {
+        if (direction == "up")
+        {
+            return "H_" + row + "_" + column;
+        }
+        if (direction == "down")
+        {
+            return "H_" + (row + 1) + "_" + column;
+        }
+        if (direction == "left")
+        {
+            return "V_" + row + "_" + column;
+        }
+        return "V_" + row + "_" + (column + 1);
+    }
+
+    private Quaternion BarrierRotation(string direction)
+    {
+        if (direction == "up" || direction == "down")
+        {
+            return Quaternion.Euler(horizontalBarrierEulerRotation);
+        }
+        return Quaternion.Euler(verticalBarrierEulerRotation);
+    }
+
+    private void ApplyPOIs(BoardState boardState)
+    {
+        if (boardState.pois == null)
+        {
+            return;
+        }
+
+        foreach (POIState poiState in boardState.pois)
+        {
+            UpdatePOIVisual(poiState);
+        }
+    }
+
+    private void UpdatePOIVisual(POIState poiState)
+    {
+        if (!poiState.active)
+        {
+            if (activePOIVisuals.TryGetValue(poiState.id, out POIVisual inactiveVisual))
+            {
+                Destroy(inactiveVisual.gameObject);
+                activePOIVisuals.Remove(poiState.id);
+            }
+            return;
+        }
+
+        GameObject selectedPrefab = null;
+        if (!poiState.revealed)
+        {
+            selectedPrefab = poiPrefab;
+        }
+        else if (poiState.type == "victim")
+        {
+            if (victimPrefabs != null && victimPrefabs.Length > 0)
+            {
+                int prefabIndex = poiState.visualIndex % victimPrefabs.Length;
+                selectedPrefab = victimPrefabs[prefabIndex];
+            }
+        }
+        else
+        {
+            selectedPrefab = falseAlarmPrefab;
+        }
+
+        if (selectedPrefab == null)
+        {
+            return;
+        }
+
+        if (activePOIVisuals.TryGetValue(poiState.id, out POIVisual currentVisual))
+        {
+            if (currentVisual.revealed == poiState.revealed
+                && currentVisual.type == poiState.type
+                && currentVisual.visualIndex == poiState.visualIndex)
+            {
+                currentVisual.gameObject.transform.position = POIGridToWorld(
+                    poiState.row,
+                    poiState.column
+                );
+                return;
+            }
+
+            Destroy(currentVisual.gameObject);
+            activePOIVisuals.Remove(poiState.id);
+        }
+
+        Transform parent = poisContainer != null ? poisContainer : transform;
+        GameObject visual = Instantiate(
+            selectedPrefab,
+            POIGridToWorld(poiState.row, poiState.column),
+            Quaternion.Euler(poiEulerRotation),
+            parent
+        );
+
+        activePOIVisuals[poiState.id] = new POIVisual
+        {
+            type = poiState.type,
+            revealed = poiState.revealed,
+            visualIndex = poiState.visualIndex,
+            gameObject = visual
+        };
+    }
+
+    private void ApplyFirefighters(BoardState boardState)
+    {
+        if (boardState.firefighters == null)
+        {
+            return;
+        }
+
+        foreach (FirefighterState firefighterState in boardState.firefighters)
+        {
+            UpdateFirefighterVisual(firefighterState);
+        }
+    }
+
+    private void UpdateFirefighterVisual(FirefighterState firefighterState)
+    {
+        if (firefighterPrefabs == null
+            || firefighterState.player < 0
+            || firefighterState.player >= firefighterPrefabs.Length)
+        {
+            return;
+        }
+
+        if (activeFirefighterVisuals.TryGetValue(
+            firefighterState.player,
+            out GameObject currentVisual))
+        {
+            currentVisual.transform.position = FirefighterGridToWorld(
+                firefighterState.row,
+                firefighterState.column
+            );
+            return;
+        }
+
+        GameObject selectedPrefab = firefighterPrefabs[firefighterState.player];
+        if (selectedPrefab == null)
+        {
+            return;
+        }
+
+        Transform parent = firefightersContainer != null ? firefightersContainer : transform;
+        GameObject visual = Instantiate(
+            selectedPrefab,
+            FirefighterGridToWorld(firefighterState.row, firefighterState.column),
+            Quaternion.Euler(firefighterEulerRotation),
+            parent
+        );
+
+        activeFirefighterVisuals[firefighterState.player] = visual;
+    }
+
     private Vector3 GridToWorld(int row, int column)
     {
         //usar origen del tablero o 0,0,0
@@ -224,6 +629,61 @@ public class WebClient : MonoBehaviour
         return new Vector3(
             origin.x + column * cellSize + cellSize / 2f,
             origin.y + effectHeight,
+            origin.z - row * cellSize - cellSize / 2f
+        );
+    }
+
+    private Vector3 BarrierGridToWorld(
+        int row,
+        int column,
+        string direction,
+        float height)
+    {
+        Vector3 origin = boardOrigin != null ? boardOrigin.position : Vector3.zero;
+
+        float x = origin.x + column * cellSize + cellSize / 2f;
+        float z = origin.z - row * cellSize - cellSize / 2f;
+
+        if (direction == "up")
+        {
+            z = origin.z - row * cellSize;
+        }
+        else if (direction == "down")
+        {
+            z = origin.z - (row + 1) * cellSize;
+        }
+        else if (direction == "left")
+        {
+            x = origin.x + column * cellSize;
+        }
+        else if (direction == "right")
+        {
+            x = origin.x + (column + 1) * cellSize;
+        }
+
+        return new Vector3(
+            x,
+            origin.y + height,
+            z
+        );
+    }
+
+    private Vector3 POIGridToWorld(int row, int column)
+    {
+        Vector3 origin = boardOrigin != null ? boardOrigin.position : Vector3.zero;
+        return new Vector3(
+            origin.x + column * cellSize + cellSize / 2f,
+            origin.y + poiHeight,
+            origin.z - row * cellSize - cellSize / 2f
+        );
+    }
+
+    private Vector3 FirefighterGridToWorld(int row, int column)
+    {
+        Vector3 origin = boardOrigin != null ? boardOrigin.position : Vector3.zero;
+        return new Vector3(
+            origin.x + column * cellSize + cellSize / 2f,
+            origin.y + firefighterHeight,
             origin.z - row * cellSize - cellSize / 2f
         );
     }
