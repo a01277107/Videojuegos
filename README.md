@@ -11,10 +11,14 @@ Ana Sofía Moreno A01707156
 Dentro de la rama de main se encuentra el pdf del instructivo del juego que se busca simular y los diagramas de estado del bombero (agente), el modelo y el juego como tal. 
 ## Develop
 Actualmente, el código aceptado para la simulación se encuentra en la rama develop. Se realizó en un archivo de tipo Jupyter Notebook (.ipynb) para poder realizar pruebas y visualizaciones.
+## Solucion-alteatoria
+Rama que contiene solución aleatoria en archivo .py desarrollada eliminando únicamente los algoritmos y lógica de coordinación y comportamiento de la versión desarrollada en la rama Develop.
 ## Unity
 Los archivos correspondientes a los gráficos para la simulación, creados en Unity, se encuentran exclusivamente en la rama de "Unity".
 ## servidorPython
 En la rama de servidorPython se encuentran los archivos necesarios para realizar la conexión entre Unity y mesa, incluyendo el de Unity como cliente, el del servidor de pyhton, y un archivo copia de la simulación de mesa en .py para ser importado por el servidor.
+## rendimientoPruebas
+Rama realizada solo para incluir los notebooks específicos con las pruebas de rendimiento de los modelos presentadas en la presentación final del proyecto.
 
 Para la realización de este proyecto se hizo uso del programa Unity para los gráficos de la simulación y de Mesa con pyhton para la programación del modelo con multiagentes.
 
@@ -24,3 +28,4 @@ Para el desarrollo y la codificación de este proyecto se hizo uso de las herram
 + Un HashSet que permitiera manejar llaves únicas para las paredes de la simulación y así evitar manejar duplicados, así como un código para la generación de llaves canónicas.
 + Uso de @dataclass para crear clases con estados y propiedades (sin funciones propias) sin la necesidad de hacer un constructor, para objetos complejos de la simulación.
 + Uso de lambda y una función como llave o criterio para ordenar los elementos de un arreglo.
++ Creación de casos de prueba para desarrollo continuo del código y para evaluación de rendimiento.
