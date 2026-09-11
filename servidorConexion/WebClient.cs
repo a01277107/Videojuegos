@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Networking;
 
+using TMPro;
+
 [Serializable]
 public class BarrierState //clase para arreglo de barreras (puertas y paredes)
 {
@@ -42,8 +44,12 @@ public class BoardState
     public int rows;
     public int columns;
     public int turn;
-    public int advancedRow;
-    public int advancedColumn;
+    public int currentFirefighterIndex;
+    public bool gameOver;
+    public string gameResult;
+    public int rescuedVictims;
+    public int lostVictims;
+    public int structuralDamage;
     public int[] fires;
     public BarrierState[] walls;
     public BarrierState[] doors;
@@ -85,6 +91,9 @@ public class WebClient : MonoBehaviour
     [SerializeField] private Vector3 horizontalBarrierEulerRotation = Vector3.zero;
     [SerializeField] private Vector3 verticalBarrierEulerRotation = new Vector3(0f, 90f, 0f);
     [SerializeField] private bool clearContainerOnStart = true;
+    [Header("Canvas")] //elementos del Canvas de retroalimentación al usuario
+    [SerializeField] private TMP_Text rescuedVictimsText;
+    [SerializeField] private TMP_Text structuralDamageText;
 
     //diccionarios de los contenidos gráficos (GameObjects) que existen (objetos y agentes)
     private readonly Dictionary<int, EffectVisual> activeEffectVisuals =
@@ -96,6 +105,9 @@ public class WebClient : MonoBehaviour
     private readonly Dictionary<int, GameObject> activeFirefighterVisuals =
         new Dictionary<int, GameObject>();
     private bool requestInProgress; //evita que se hagan dos petciciones simultáneas
+    [SerializeField] private float stepInterval = 1.5f; //tiempo entre turnos (steps) de la simulación
+    private bool simulationGameOver = false;
+    private Coroutine simulationCoroutine;
 
     //clase para obtener/guardar contenido de las celdas en Unity
     private class EffectVisual
@@ -162,65 +174,94 @@ public class WebClient : MonoBehaviour
     {
         if (!requestInProgress)
         {
-            StartCoroutine(RequestState(false));
+            StartCoroutine(RequestState());
         }
     }
 
-    //para probar: cambiar elementos del tablero específicos
-    public void TestConnection()
+    //ejecutar un step completo de la simulación de Mesa y actualizar Unity
+    public void StepSimulation()
     {
         if (!requestInProgress)
         {
-            StartCoroutine(RequestTest());
+            StartCoroutine(RequestStep());
+        }
+    }
+    
+    //iniciar simulación automática
+    public void StartAutomaticSimulation()
+    {
+        if (simulationCoroutine == null) //evitar iniciar dos ciclos al mismo tiempo
+        {
+            simulationCoroutine = StartCoroutine(RunSimulation());
         }
     }
 
-    //para probar: ejecutar manualmente advanceFire
-    public void AdvanceFire()
+
+    //detener simulación automática manualmente
+    public void StopAutomaticSimulation()
     {
-        if (!requestInProgress)
+        if (simulationCoroutine != null)
         {
-            StartCoroutine(RequestState(true));
+            StopCoroutine(simulationCoroutine);
+            simulationCoroutine = null;
         }
+    }
+
+    //ejecutar steps hasta que la partida termine
+    private IEnumerator RunSimulation()
+    {
+        while (!simulationGameOver)
+        {
+            //esperar a que Mesa haga el step y Unity recibe el estado nuevo
+            yield return StartCoroutine(RequestStep());
+            //si el step terminó la partida, se detiene la corrutina para pedir actualizaciones
+            if (simulationGameOver)
+            {
+                break;
+            }
+            //esperar antes del siguiente step para visualizarlo, con intervaloe establecido
+            yield return new WaitForSeconds(stepInterval);
+        }
+        simulationCoroutine = null;
+        Debug.Log("Simulación automática terminada.");
     }
 
     //reiniciar simulación
     public void ResetSimulation()
     {
+        StopAutomaticSimulation(); //detener simulación y dar fin a juego
+        simulationGameOver = false;
         if (!requestInProgress)
         {
             StartCoroutine(RequestReset());
         }
     }
 
-    //corrutina para probar y modificar gameObjects
-    private IEnumerator RequestTest()
-{
-    requestInProgress = true;
-
-    using (UnityWebRequest request = CreateJsonPost(serverUrl + "/test"))
-    {
-        yield return request.SendWebRequest();
-        HandleResponse(request);
-    }
-
-    requestInProgress = false;
-}
-
-    //corrutina para obtener estado del tablero (con o sin advanceFire)
-    private IEnumerator RequestState(bool advanceFire)
+    //corrutina para obtener el estado actual del tablero sin avanzar la simulación
+    private IEnumerator RequestState()
     {
         requestInProgress = true;
-        //si advanceFire = true usa ruta step, si no usa ruta state
-        string route = advanceFire ? "/step" : "/state";
-        //crear solicitud. Si advanceFire = crea JSON de post, si no hace solicitud get
-        using (UnityWebRequest request = advanceFire
-            ? CreateJsonPost(serverUrl + route)
-            : UnityWebRequest.Get(serverUrl + route))
+
+        using (UnityWebRequest request = UnityWebRequest.Get(serverUrl + "/state"))
         { //asincrónico: manda la petición y retoma una vez que llega la respuesta
             yield return request.SendWebRequest(); //mandar petición
             HandleResponse(request); //manejar respuesta
         }
+
+        requestInProgress = false;
+    }
+
+    //corrutina para ejecutar un step completo de Mesa y recibir el nuevo estado
+    private IEnumerator RequestStep()
+    {
+        requestInProgress = true;
+
+        using (UnityWebRequest request = CreateJsonPost(serverUrl + "/step"))
+        { //asincrónico: manda la petición y retoma una vez que llega la respuesta
+            yield return request.SendWebRequest(); //mandar petición
+            HandleResponse(request); //manejar respuesta
+        }
+
         requestInProgress = false;
     }
 
@@ -266,12 +307,25 @@ public class WebClient : MonoBehaviour
             Debug.LogError("La respuesta del servidor no contiene fireCells.");
             return;
         }
+        //guardar si la simulación terminó en este turno o no
+        simulationGameOver = state.gameOver;
         //usa estado nuevo para aplicarlo a la matriz de objetos de fuego y a arreglos de los demás objetos y agentes
         ApplyFireMatrix(state);
         ApplyBarriers(state);
         ApplyPOIs(state);
         ApplyFirefighters(state);
-        Debug.Log("Turno de fuego recibido: " + state.turn);
+        ApplyGameFeedback(state);
+        Debug.Log(
+            "Turno de simulación recibido: " + state.turn
+            + " | Rescatadas: " + state.rescuedVictims
+            + " | Perdidas: " + state.lostVictims
+            + " | Daño: " + state.structuralDamage
+        );
+
+        if (state.gameOver)
+        {
+            Debug.Log("Partida terminada: " + state.gameResult);
+        }
     }
 
     private void ApplyFireMatrix(BoardState boardState)
@@ -462,6 +516,22 @@ public class WebClient : MonoBehaviour
             state = barrierState.state,
             gameObject = visual
         };
+    }
+
+    //actualizar contadores del canvas de la simulación
+    private void ApplyGameFeedback(BoardState boardState)
+    {
+        if (rescuedVictimsText != null)
+        {
+            rescuedVictimsText.text =
+                "Rescatadas: " + boardState.rescuedVictims + " / 7";
+        }
+
+        if (structuralDamageText != null)
+        {
+            structuralDamageText.text =
+                "Daño: " + boardState.structuralDamage + " / 24";
+        }
     }
 
     //función para crear las llaves de las barreras y obtener la misma llave para 2 celdas de mesa que comparten una pared (evitando duplicados)

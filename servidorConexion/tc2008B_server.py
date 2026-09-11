@@ -14,8 +14,6 @@ NUM_PLAYERS = 6
 #Inicializar modelo/partida 1 sola vez
 model = FireRescueModel(COLUMNS, ROWS, NUM_PLAYERS)
 turn = 0
-#para probar
-test_step = 0
 
 
 def get_barrier_states():
@@ -50,7 +48,7 @@ def get_barrier_states():
                     direction
                 )
 
-                if wall_state > 0: #sí hay una pared, se agrega a us arreglo
+                if wall_state > 0: #sí hay una pared, se agrega a su arreglo
                     wall_states.append({
                         "row": row,
                         "column": column,
@@ -68,18 +66,19 @@ def get_barrier_states():
     return wall_states, door_states  #devolver arreglos de paredes y puertas
 
 
-def get_board_state(last_fireAdvance=None):
+def get_board_state():
     #Prepara formato tipo json con la información que se envía a Unity
     wall_states, door_states = get_barrier_states() #obtener barreras con función aparte
     poi_states = [] #arreglo para guardar los POIs
     victim_visual_index = 0
+
     for poi_id, poi in enumerate(model.pois): #recorrer todos los POIs del modelo
         visual_index = -1
         if poi.type == "victim": #si el POI es de tipo víctima
             visual_index = victim_visual_index #se le asigna el siguiente visual de víctima
             victim_visual_index += 1
 
-        poi_states.append({ #agregar el nuevo POI con sus atributos al arreglo de POIs 
+        poi_states.append({ #agregar el nuevo POI con sus atributos al arreglo de POIs
             "id": poi_id,
             "row": poi.row,
             "column": poi.column,
@@ -101,17 +100,20 @@ def get_board_state(last_fireAdvance=None):
         "rows": model.rows,
         "columns": model.columns,
         "turn": turn,
-        #Se debe aplanar las matriz de fuego como lista para el formato ([row, column] es row * columns + column)
+        "currentFirefighterIndex": model.current_firefighter_index,
+        "gameOver": model.game_over,
+        "gameResult": model.game_result if model.game_result is not None else "",
+        "rescuedVictims": model.countRescuedVictims(),
+        "lostVictims": model.countLostVictims(),
+        "structuralDamage": model.environment.total_damage_markers,
+        #Se debe aplanar la matriz de fuego como lista para el formato ([row, column] es row * columns + column)
         "fires": model.fireCells.flatten().tolist(),
         "walls": wall_states,
         "doors": door_states,
         "pois": poi_states,
         "firefighters": firefighter_states,
     }
-    #obtener las coordenadas donde cayó el fireAdvance
-    if last_fireAdvance is not None:
-        state["advancedRow"] = last_fireAdvance[0]
-        state["advancedColumn"] = last_fireAdvance[1]
+
     #devuelve el formato con la información del estado del tablero
     return state
 
@@ -129,80 +131,48 @@ class Server(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        #actualmente la única ruta de request "state" debe ser obtener el estado del tablero
-        if self.path not in ("/", "/state"):
+        #la ruta "state" obtiene el estado actual del tablero sin avanzar la simulación
+        if self.path != "/state":
             self._send_json({"error": "Ruta no encontrada"}, status=404)
             return
+
         #Consultar el estado del tablero
         self._send_json(get_board_state())
 
     def do_POST(self):
-        global model, turn, test_step #para probar
+        global model, turn
+
         #obtener tamaño de post de unity
         content_length = int(self.headers.get("Content-Length", 0))
         if content_length: #si existe, recibir los bytes de respuesta (rfile)
             self.rfile.read(content_length)
 
-        #para pruebas: ruta de post "step" que ejecuta el advanceFire
-        if self.path in ("/", "/step"):
-            advanced_cell = model.advanceFire() #generar advanceFire
-            turn += 1
-            self._send_json(get_board_state(advanced_cell)) #obtener nuevo estado del tablero
-            return
+        #ruta "step": ejecuta un turno completo del modelo de Mesa
+        if self.path == "/step":
+            #si la partida ya terminó, no se vuelve a modificar el modelo
+            if not model.game_over:
+                model.step()
+                turn += 1
 
-        #ruta temporal para probar actualización de elementos en Unity
-        if self.path == "/test":
-            if test_step == 0:
-                #dañar una pared intacta
-                model.environment.damage_wall(4, 2, "right")
-            elif test_step == 1:
-                #volver a dañar la misma pared para destruirla
-                model.environment.damage_wall(4, 2, "right")
-            elif test_step == 2:
-                #abrir una puerta cerrada
-                model.environment.toggle_door(4, 4, "down")
-            elif test_step == 3:
-                #mover el primer bombero a otra casilla
-                firefighter = model.firefighters[0]
-                model.FigthersGrid.move_agent(
-                    firefighter,
-                    (0, 7)
-                )
-                firefighter.row = 7
-                firefighter.column = 0
-            elif test_step == 4:
-                #revelar el primer POI sin eliminarlo
-                model.pois[0].revealed = True
-            elif test_step == 5:
-                #convertirlo temporalmente en falsa alarma
-                model.pois[0].type = "falseAlarm"
-            elif test_step == 6:
-                #retirar el POI
-                model.pois[0].active = False
-            else:
-                #reiniciar todo para volver a hacer la prueba
-                model = FireRescueModel(COLUMNS, ROWS, NUM_PLAYERS)
-                test_step = 0
-                self._send_json(get_board_state())
-                return
-            test_step += 1
+            #Unity recibe el estado completo resultante del step
             self._send_json(get_board_state())
             return
-        
-        #ruta de post "reset" que permite reiniciar simulación
+
+        #ruta "reset" que permite reiniciar simulación
         if self.path == "/reset":
-            test_step = 0 #para probar
             #vuelve a crear modelo/tablero/partida
             model = FireRescueModel(COLUMNS, ROWS, NUM_PLAYERS)
             turn = 0
             self._send_json(get_board_state())
             return
+
         #no debe de haber otra ruta post
         self._send_json({"error": "Ruta no encontrada"}, status=404)
-        
+
     #imprimir rutas para debuggear
     def log_message(self, format, *args):
         logging.info("%s - %s", format % args)
+
 
 #Definir función que inicia el servidor
 def run(server_class=HTTPServer, handler_class=Server, port=8585):
@@ -218,6 +188,7 @@ def run(server_class=HTTPServer, handler_class=Server, port=8585):
 
     httpd.server_close()
     logging.info("Stopped")
+
 
 #ejecuta archivo al ser llamado directamente
 if __name__ == "__main__":
